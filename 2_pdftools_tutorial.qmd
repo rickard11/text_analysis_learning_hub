@@ -1,0 +1,118 @@
+---
+title: 'Text analysis workshop: Getting data from PDFs'
+author: "Casey O'Hara"
+format: 
+  html:
+    toc: true
+    embed-resources: true
+    number-sections: true
+execute:
+  warning: false
+  message: false
+---
+
+# Overview
+
+How often have you run across a published paper with awesome-looking data, but it is only available in PDF format?  ARGHHH!  But using the `pdftools` package and some `stringr` functions with regex patterns, we can get that data out and into a usable format.
+
+```{r}
+library(tidyverse)
+
+library(pdftools)
+
+# ?pdftools
+
+```
+
+# The `pdftools` package
+
+The pdftools package basically has five functions:
+
+* `pdf_info(pdf, opw = "", upw = "")` to get metadata about the pdf itself
+* `pdf_text(pdf, opw = "", upw = "")` to get the text out of the pdf.
+* `pdf_fonts(pdf, opw = "", upw = "")` to find out what fonts are used (including embedded fonts)
+* `pdf_attachments(pdf, opw = "", upw = "")` umm attachments I guess?
+* `pdf_toc(pdf, opw = "", upw = "")` and a table of contents.
+
+Really we'll just focus on `pdf_text()`.
+
+``` {r}
+pdf_smith <- file.path('pdfs/smith_wilen_2003.pdf')
+
+smith_text <- pdf_text(pdf_smith)
+```
+
+`pdf_text()` returns a vector of strings, one for each page of the pdf.  So we can mess with it in tidyverse style, let's turn it into a dataframe, and keep track of the pages.
+
+Then we can use `stringr::str_split()` to break the pages up into individual lines.  Each line of the pdf is concluded with a backslash-n, so split on this.  We will also add a line number in addition to the page number.
+
+``` {r}
+
+smith_df <- data.frame(text = smith_text) # one row per page
+
+smith_df <- data.frame(text = smith_text) %>%
+  mutate(page = 1:n()) %>%
+  mutate(text_sep = str_split(text, '\\n')) %>% # split by line, text_set=lists of lines 
+  unnest(text_sep) # separate lists into rows
+
+smith_df <- data.frame(text = smith_text) %>%
+  mutate(page = 1:n()) %>%
+  mutate(text_sep = str_split(text, '\\n')) %>%
+  unnest(text_sep) %>%
+  group_by(page) %>%
+  mutate(line = 1:n()) %>% # add line #s by page
+  ungroup()
+
+```
+
+# Getting the table out of the PDF
+
+Let's look at the PDF, specifically we want to get the data in the table on page 8 of the document. More specifically, the table data is in lines 8 to 18 on page 8.  This is a table comparing the number of active urchin divers to the number of patches in which they dove for urchins, from 1988 to 1999.
+
+```{r}
+smith_df %>%
+  filter(page == 8 & line <= 25 & line >= 7) %>%
+  pull(text_sep)
+```
+
+
+* The column headings are annoyingly just years, and R doesn't like numbers as column names, so we'll rename them as 'y####' for year.
+* Break up the columns separated by (probably tabs but we can just use) spaces.  We'll use the `tidyr::separate` function to separate into columns by spaces.  Note, one space and multiple spaces should count the same way - how to do that in regex?
+
+## extract table (not run in workshop)
+
+``` {r}
+### We want to extract data from the table on page 8
+page8_df <- smith_df %>%
+  filter(page == 8)
+
+### Let's just brute force cut out the table
+col_lbls <- c('n_patches', paste0('y', 1988:1999))
+
+table1_df <- page8_df %>%
+  filter(line %in% 8:18) %>%
+  separate(text_sep, col_lbls, ' +') 
+
+```
+
+Now we can ditch the `text`, `page`, and `line` columns, and pull the result into a tidy format (long format rather than wide) for easier operations.
+
+* When we pull the 'y####' columns into a year column, let's turn those into integers instead of a character
+* Same goes for the number of patches and number of divers - they're all character instead of integer (because it started out as text).
+
+``` {r}
+
+table1_tidy_df <- table1_df %>%
+  select(-text, -line, -page) %>%
+  gather(year, n_divers, starts_with('y')) %>%
+  mutate(year = str_replace(year, 'y', ''), ### or str_extract(year, '[0-9]{4}')
+         year = as.integer(year),
+         n_patches = as.integer(n_patches),
+         n_divers = as.integer(n_divers))
+
+DT::datatable(table1_tidy_df)
+```
+
+With pdftools, we extracted a data table, but we could also just extract the text itself if that's what we really wanted.  
+
+## See also: https://github.com/ropensci/tabulizer
